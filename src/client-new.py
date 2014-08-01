@@ -56,44 +56,73 @@ def recv_icmp(sock, buflen):
     return addr[0], type_, code, checksum, id_, seq, raw[28:]
 
 
-class ServerServer(object):
-    def __init__(self, target_host, target_port):
-        self.target_host = target_host
-        self.target_port = target_port
+class ClientServer(object):
+    def __init__(self, peer, bind_port, bind_ip=None):
+        if bind_ip is None:
+            bind_ip = "0.0.0.0"
+        self.bind_ip = bind_ip
+        self.bind_port = bind_port
+        self.server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+
         self.icmp_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW,
                                        socket.getprotobyname("icmp"))
+
+        self.peer_host = peer
+        self._id = 0xFF00 & os.getpid()
         self._sock_id_map = {}
         self._icmp_status = {}
 
-        self.conn_socks = set()
+        self.cli_socks = set()
 
     def serve_forever(self, poll_interval=0.01):
+        self.server_sock.bind((self.bind_ip, self.bind_port))
+        self.server_sock.listen(1024)
+
         while 1:
-            rfds, _, _ = select.select([self.icmp_sock] + list(self.conn_socks),
+            rfds, _, _ = select.select([self.server_sock, self.icmp_sock] + list(self.cli_socks),
                                             [], [], poll_interval)
             # logger.debug("rfds: %s", str(rfds))
+            if self.server_sock in rfds:
+                cli_sock, cli_addr = self.server_sock.accept()
+                cli_sock.setblocking(False)
+                self.cli_socks.add(cli_sock)
+                logger.debug("accept connect: %s", str(cli_sock.getpeername()))
+
             if self.icmp_sock in rfds:
                 ret = self.recv_icmp()
                 if ret:
-                    logger.debug("recv_icmp: %s", str(ret))
                     stat = self._icmp_status[ret["id"]]
                     stat["datas"].append(ret["data"])
 
-            for sock in [x for x in self.conn_socks if x in rfds]:
+            for sock in [x for x in self.cli_socks if x in rfds]:
                 data = sock.recv(MAX_BUF_LEN)
                 id_ = self._sock_id_map.get(sock, None)
-                stat = self._icmp_status[id_]
                 if len(data) == 0:
                     logger.debug("tcp socket closed: %s", sock.getpeername())
                     self.socket_close(sock)
-                    stat["closing"] = 1
+                    if id_ is not None:
+                        stat = self._icmp_status[id_]
+                        stat["closing"] = 1
                     continue
 
-                self.send_icmp(stat["peer"], id_, data)
+                if id_ is None:
+                    id_ = self.new_id()
+                    logger.debug("new tunnel: %d", id_)
+                    self._sock_id_map[sock] = id_
+                    self._icmp_status[id_] = {
+                        "id": id_,
+                        "seq": 0,
+                        "closing": 0,
+                        "socket": sock,
+                        "datas": []
+                    }
+                else:
+                    id_ = self._sock_id_map[sock]
+                self.send_icmp(id_, data)
 
             for id_ in self._icmp_status.keys():
                 stat = self._icmp_status[id_]
-                print stat
                 if stat["datas"]:
                     datas = stat["datas"]
                     stat["datas"] = []
@@ -103,66 +132,47 @@ class ServerServer(object):
                             continue
                         try:
                             stat["socket"].sendall(data)
-                        except socket.error, e:
-                            if e.errno in (socket.EAGAIN, socket.EWOULDBLOCK):
-                                stat["datas"].append(data)
-                            else:
-                                logger.debug("[%d]socket.sendall(): %s", stat["id"], e)
-                                self.socket_close(stat["socket"])
+                        except Exception, e:
+                            stat["datas"].append(data)
+                            logger.debug("[%d]socket.sendall(): %s", stat["id"], e)
 
-                if stat["closing"]:
+                if not stat["datas"] and stat["closing"]:
                     logger.debug("close tunnel: %d", id_)
                     sock = stat["socket"]
-                    if sock in self.conn_socks:
+                    if sock in self.cli_socks:
                         self.socket_close(sock)
-                    self.send_icmp(stat["peer"], id_, "/close")     # 发送断开连接请求
+                    self.send_icmp(id_, "/close")     # 发送断开连接请求
                     del self._icmp_status[id_]
+                        
+    def new_id(self):
+        self._id += 1
+        return self._id
 
     def socket_close(self, sock):
         sock.shutdown(socket.SHUT_RDWR)
         sock.close()
-        self.conn_socks.remove(sock)
+        self.cli_socks.remove(sock)
 
-    def send_icmp(self, host, id_, data, type_=8):
+    def send_icmp(self, id_, data, type_=8):
         stat = self._icmp_status[id_]
         seq = stat["seq"]
         stat["seq"] += 1
 
-        send_icmp(self.icmp_sock, host, type_, 0, id_, seq, MAGIC_STR+data)
+        send_icmp(self.icmp_sock, self.peer_host, type_, 0, id_, seq, MAGIC_STR+data)
 
     def recv_icmp(self):
-        peer, _, _, _, id_, seq, data = recv_icmp(self.icmp_sock, MAX_BUF_LEN)
-        if not data.startswith(MAGIC_STR):
+        _, _, _, _, id_, seq, data = recv_icmp(self.icmp_sock, MAX_BUF_LEN)
+        if not data.startswith(MAGIC_STR) or id_ not in self._icmp_status:
             return
         data = data[len(MAGIC_STR):]
 
-        if id_ not in self._icmp_status:
-            self.new_connection(peer, id_, seq, self.target_host, self.target_port)
-
         return {
-            "peer": peer,
             "id": id_,
             "seq": seq,
             "data": data
         }
 
-    def new_connection(self, peer, id_, seq, host, port):
-        ip = socket.gethostbyname(host)
-        sock = socket.create_connection((ip, port))
-        sock.setblocking(False)
-        self.conn_socks.add(sock)
-        self._sock_id_map[sock] = id_
-        self._icmp_status[id_] = {
-            "id": id_,
-            "peer": peer,
-            "seq": seq,
-            "closing": 0,
-            "socket": sock,
-            "datas": []
-        }
-        return sock
-
 if __name__ == "__main__":
-    s = ServerServer("10.19.190.21", 80)
-    logger.debug("ICMP Servicing ...")
+    s = ClientServer("usvps.jinxing.me", 9140)
+    logging.info("Serving %s", str(s.server_sock.getsockname()))
     s.serve_forever()
