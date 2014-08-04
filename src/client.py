@@ -12,6 +12,7 @@ from baseServer import BaseServer
 
 class ClientServer(BaseServer):
     def __init__(self, peer, bind_port, bind_ip=None):
+        BaseServer.__init__(self)
         if bind_ip is None:
             bind_ip = "0.0.0.0"
         self.bind_ip = bind_ip

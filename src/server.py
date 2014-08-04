@@ -11,6 +11,7 @@ from baseServer import BaseServer
 
 class Server(BaseServer):
     def __init__(self, target_host, target_port):
+        BaseServer.__init__(self)
         self.target_host = target_host
         self.target_port = target_port
         self.icmp_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW,
