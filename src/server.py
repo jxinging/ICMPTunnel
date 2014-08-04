@@ -24,35 +24,50 @@ class Server(BaseServer):
         self.conn_socks.add(sock)
         self.sock_id_map[sock] = id_
         self.id_tunnel_map[id_] = ServerTunnel(id_, sock, peer)
-        return sock
+        return self.id_tunnel_map[id_]
+
+    def check_seq(self, icmp_p):
+        if icmp_p.seq % 2 != 0:
+            return False
+        return BaseServer.check_seq(self, icmp_p)
 
     def process_icmp_sock(self):
         icmp_p = self.recv_icmp()
-        if not icmp_p or icmp_p.seq % 2 != 0:
+        if not icmp_p or not self.check_seq(icmp_p):
             return
 
-        if icmp_p.id not in self.id_tunnel_map:
-            self.new_connection(icmp_p.addr, icmp_p.id, icmp_p.seq,
+        tun = self.id_tunnel_map.get(icmp_p.id, None)
+        if tun is None:
+            tun = self.new_tunnel(icmp_p.addr, icmp_p.id, icmp_p.seq,
                                 self.target_host, self.target_port)
-        elif icmp_p.seq != self.id_tunnel_map[icmp_p.id].recv_seq and icmp_p.seq != 0:
+
+        if icmp_p.seq == tun.recv_seq:
+            tun.tcp_send_bufs.append(icmp_p.data)
+            next_seq = tun.next_send_seq()
+            while next_seq in tun.icmp_recv_bufs:
+                data = tun.icmp_recv_bufs[next_seq]
+                tun.tcp_send_bufs.append(data)
+                next_seq = tun.next_send_seq()
+
+        elif icmp_p.seq > tun.recv_seq:
+            tun.icmp_recv_bufs[icmp_p.seq] = icmp_p.data
+            tun.update_recv_seq()
+        elif icmp_p.seq == 0:
+            if icmp_p.data.startswith("/ack"):
+                ack_seq = int(icmp_p["data"][len("/ack"):])
+                tun = self.id_tunnel_map[icmp_p.id]
+                sock = tun.socket
+                if sock in self.blocked_socks:
+                    self.tcp_socks.add(sock)
+                    self.blocked_socks.remove(sock)
+                    self.update_select_socks()
+                del tun.icmp_send_bufs[ack_seq]
+                logger.debug("tunnel %d ack %d", icmp_p.id, ack_seq)
+                return
+        else:
             logger.info("error pocket seq: %d != %d",
-                        icmp_p.seq, self.id_tunnel_map[icmp_p.id].recv_seq)
+                        icmp_p.seq, tun.recv_seq)
             return
-
-        if icmp_p.data.startswith("/ack"):
-            ack_seq = int(icmp_p["data"][len("/ack"):])
-            tun = self.id_tunnel_map[icmp_p.id]
-            sock = tun.socket
-            if sock in self.blocked_socks:
-                self.conn_socks.add(sock)
-                self.blocked_socks.remove(sock)
-                self.update_select_socks()
-            del tun.icmp_send_bufs[ack_seq]
-            logger.debug("tunnel %d ack %d", icmp_p.id, ack_seq)
-            return
-
-        # logger.debug("recv_icmp: %s", str(ret))
-        self.id_tunnel_map[icmp_p.id].tcp_send_bufs.append(icmp_p.data)
 
     def process_tcp_sock(self, sock):
         data = sock.recv(TCP_BUF_LEN)
@@ -94,11 +109,12 @@ class Server(BaseServer):
                 logger.debug("send icmp[%d] %db", id_, len(data))
                 self.send_icmp(tun.peer, id_, data, seq)
 
-            if len(tun.icmp_send_bufs) > 256:
+            if len(tun.icmp_send_bufs) > MAX_BUFS_LEN and \
+                            tun.socket not in self.blocked_socks:
                 self.blocked_socks.add(tun.socket)
-                self.tcp_socks.remove(tun.socket)    # 直到返回 ack 包才继续处理该连接
+                self.tcp_socks.remove(tun.socket)
                 self.update_select_socks()
-                tun.block_timeout = time.time() + 1
+                tun.block_timeout = time.time() + BLOCK_TIME
                 logger.debug("tunnel %d blocked", id_)
 
             now_time = time.time()
@@ -109,15 +125,16 @@ class Server(BaseServer):
                     self.tcp_socks.add(sock)
                     self.blocked_socks.remove(sock)
                     self.update_select_socks()
+                    tun.closing = 1
                     logger.debug("tunnel %d block timeout", tun.id)
 
             if tun.closing:
                 logger.debug("close tunnel: %d", id_)
                 sock = tun.socket
-                if sock in self.conn_socks:
+                if sock in self.tcp_socks:
                     self.socket_close(sock)
                 self.send_icmp(tun.peer, id_, "/close")     # 发送断开连接请求
-                del self._icmp_status[id_]
+                del self.id_tunnel_map[id_]
                 self.update_select_socks()
 
     def serve_forever(self, poll_interval=0.01):

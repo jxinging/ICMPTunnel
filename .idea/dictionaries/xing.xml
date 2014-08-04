@@ -2,6 +2,7 @@
   <dictionary name="xing">
     <words>
       <w>icmp</w>
+      <w>recv</w>
     </words>
   </dictionary>
 </component>

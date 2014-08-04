@@ -11,4 +11,4 @@ MAGIC_ID = "tunnel@tcpovericmp"
 TCP_BUF_LEN = MAX_BUF_LEN - len(MAGIC_ID) - 20 - 8
 
 MAX_BUFS_LEN = 256
-BLOCK_TIME = 1
+BLOCK_TIME = 10

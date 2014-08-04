@@ -18,9 +18,16 @@ class BaseTunnel(object):
 
     def next_send_seq(self):
         seq = self.send_seq
-        self.send_seq += 2
+        self.send_seq = self.get_next_send_seq()
         return seq
 
+    def get_next_send_seq(self):
+        return self.send_seq + 2
+
+    def update_recv_seq(self):
+        seq = self.recv_seq
+        self.recv_seq += 2
+        return seq
 
 class ClientTunnel(BaseTunnel):
     def __init__(self, id_, socket):

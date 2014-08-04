@@ -36,8 +36,13 @@ class BaseServer(object):
 
     def recv_icmp(self):
         icmp_p = ICMPPocket.parse(self.icmp_sock, MAX_BUF_LEN)
-        if not icmp_p.data.startswith(MAGIC_ID) or icmp_p.id not in self.id_tunnel_map:
+        if not icmp_p.data.startswith(MAGIC_ID):
             return None
+
+        self.send_icmp(icmp_p.addr, icmp_p.id, "/ack"+str(icmp_p.seq), 0)
+        if icmp_p.id in  self.id_tunnel_map and \
+                        icmp_p.seq < self.id_tunnel_map[icmp_p.id]:
+            return      # 丢弃已处理过的数据
 
         icmp_p.data = icmp_p.data[len(MAGIC_ID):]
         return icmp_p
@@ -49,6 +54,13 @@ class BaseServer(object):
             socks.append(self.listen_sock)
         self.select_socks = socks
         return self.select_socks
+
+    def check_seq(self, icmp_p):
+        if icmp_p.id in self.id_tunnel_map:
+            tun = self.id_tunnel_map[icmp_p.id]
+            if tun.recv_seq != icmp_p.seq:
+                return False
+        return True
 
     def new_tunnel(self):
         raise NotImplemented
