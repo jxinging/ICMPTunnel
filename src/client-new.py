@@ -11,8 +11,9 @@ import logging
 logging.basicConfig(level=logging.DEBUG)
 logger = logging
 
-MAX_BUF_LEN = 65536
+MAX_BUF_LEN = 4096
 MAGIC_STR = "tunnel@tcpovericmp"
+TCP_BUF_LEN = MAX_BUF_LEN - len(MAGIC_STR) - 20 - 8
 
 
 def icmp_checksum(source_string):
@@ -75,7 +76,7 @@ class ClientServer(object):
 
         self.cli_socks = set()
 
-    def serve_forever(self, poll_interval=0.01):
+    def serve_forever(self, poll_interval=0.1):
         self.server_sock.bind((self.bind_ip, self.bind_port))
         self.server_sock.listen(1024)
 
@@ -93,10 +94,19 @@ class ClientServer(object):
                 ret = self.recv_icmp()
                 if ret:
                     stat = self._icmp_status[ret["id"]]
-                    stat["datas"].append(ret["data"])
+                    logger.debug("recv icmp[%d] %db", ret["id"], len(ret["data"]))
+                    self.send_icmp(ret["id"], "/ack"+str(ret["seq"]), 0)    # 客户端 seq 0 专用于 ack
+                    if ret["is_error_seq"]:
+                        stat["icmp_recv_bufs"][ret["seq"]] = ret["data"]
+                    else:
+                        stat["datas"].append(ret["data"])
+                        next_seq = ret["seq"] + 2
+                        while next_seq in stat["icmp_recv_bufs"]:
+                            stat["datas"].append(stat["icmp_recv_bufs"][next_seq])
+                            next_seq += 2
 
             for sock in [x for x in self.cli_socks if x in rfds]:
-                data = sock.recv(MAX_BUF_LEN)
+                data = sock.recv(TCP_BUF_LEN)
                 id_ = self._sock_id_map.get(sock, None)
                 if len(data) == 0:
                     logger.debug("tcp socket closed: %s", sock.getpeername())
@@ -112,10 +122,12 @@ class ClientServer(object):
                     self._sock_id_map[sock] = id_
                     self._icmp_status[id_] = {
                         "id": id_,
-                        "seq": 0,
+                        "send_seq": 2,
+                        "recv_seq": 3,
                         "closing": 0,
                         "socket": sock,
-                        "datas": []
+                        "datas": [],
+                        "icmp_recv_bufs": {}
                     }
                 else:
                     id_ = self._sock_id_map[sock]
@@ -143,7 +155,7 @@ class ClientServer(object):
                         self.socket_close(sock)
                     self.send_icmp(id_, "/close")     # 发送断开连接请求
                     del self._icmp_status[id_]
-                        
+
     def new_id(self):
         self._id += 1
         return self._id
@@ -153,26 +165,40 @@ class ClientServer(object):
         sock.close()
         self.cli_socks.remove(sock)
 
-    def send_icmp(self, id_, data, type_=8):
+    def send_icmp(self, id_, data, seq=None, type_=8):
         stat = self._icmp_status[id_]
-        seq = stat["seq"]
-        stat["seq"] += 1
+        if seq is None:
+            seq = stat["send_seq"]
+            stat["send_seq"] += 2
 
         send_icmp(self.icmp_sock, self.peer_host, type_, 0, id_, seq, MAGIC_STR+data)
 
     def recv_icmp(self):
         _, _, _, _, id_, seq, data = recv_icmp(self.icmp_sock, MAX_BUF_LEN)
+        if seq % 2 != 1:
+            # logger.debug(u"server 发送的 icmp 包 seq 必须是奇数")
+            return
         if not data.startswith(MAGIC_STR) or id_ not in self._icmp_status:
             return
+
         data = data[len(MAGIC_STR):]
+
+        if seq != self._icmp_status[id_]["recv_seq"]:
+            logger.info("error pocket seq: %d != %d", seq, self._icmp_status[id_]["recv_seq"])
+            is_error_seq = True
+        else:
+            self._icmp_status[id_]["recv_seq"] = seq+2
+            is_error_seq = False
 
         return {
             "id": id_,
             "seq": seq,
-            "data": data
+            "data": data,
+            "is_error_seq": is_error_seq
         }
 
 if __name__ == "__main__":
+    # s = ClientServer("14.17.123.11", 9140)
     s = ClientServer("usvps.jinxing.me", 9140)
     logging.info("Serving %s", str(s.server_sock.getsockname()))
     s.serve_forever()

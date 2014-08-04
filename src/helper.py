@@ -18,7 +18,7 @@ ICMP_ECHO = 8
 
 config = {
     "peer": "14.17.123.11",
-    "target_ip": "10.19.190.21",
+    "target_ip": "www.baidu.com",
     "target_port": 80
 }
 
