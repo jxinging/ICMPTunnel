@@ -13,6 +13,8 @@ from baseServer import BaseServer
 class ClientServer(BaseServer):
     def __init__(self, peer, bind_port, bind_ip=None):
         BaseServer.__init__(self)
+        self.icmp_type = 8
+
         if bind_ip is None:
             bind_ip = "0.0.0.0"
         self.bind_ip = bind_ip
@@ -26,7 +28,6 @@ class ClientServer(BaseServer):
                                        socket.getprotobyname("icmp"))
 
         self.select_socks = None
-
     def new_id(self):
         id_ = self._id
         self._id += 1
@@ -83,6 +84,7 @@ class ClientServer(BaseServer):
             tun.icmp_recv_bufs[icmp_p.seq] = icmp_p.data
             tun.update_recv_seq()
         elif icmp_p.seq == 0:
+            logger.debug("recv a ack pocket")
             if icmp_p.data.startswith("/ack"):
                 ack_seq = int(icmp_p["data"][len("/ack"):])
                 tun = self.id_tunnel_map[icmp_p.id]
@@ -143,7 +145,7 @@ class ClientServer(BaseServer):
             if tun.icmp_send_bufs:
                 min_seq = min(tun.icmp_send_bufs.keys())
                 data = tun.icmp_send_bufs[min_seq]
-                logger.debug("send icmp[%d] %db", id_, len(data))
+                logger.debug("send icmp[%d.%d] %db", id_, min_seq, len(data))
                 self.send_icmp(tun.id, data, min_seq)
                 if len(tun.icmp_send_bufs) > MAX_BUFS_LEN and \
                                 tun.socket not in self.blocked_socks:
@@ -199,5 +201,5 @@ class ClientServer(BaseServer):
 if __name__ == "__main__":
     s = ClientServer("14.17.123.11", 9140)
     # s = ClientServer("usvps.jinxing.me", 9140)
-    logging.info("Serving %s", str(s.listen_sock.getsockname()))
+    # logging.info("Serving %s", str(s.listen_sock.getsockname()))
     s.serve_forever()

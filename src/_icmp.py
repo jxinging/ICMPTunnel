@@ -46,6 +46,7 @@ class ICMPPocket(object):
         if buflen is not None:
             # socket
             raw, addr = obj.recvfrom(buflen)
+            addr = addr[0]
         else:
             raw = obj
             addr = None

@@ -12,6 +12,7 @@ from baseServer import BaseServer
 class Server(BaseServer):
     def __init__(self, target_host, target_port):
         BaseServer.__init__(self)
+        self.icmp_type = 0
         self.target_host = target_host
         self.target_port = target_port
         self.icmp_sock = socket.socket(socket.AF_INET, socket.SOCK_RAW,
@@ -22,7 +23,7 @@ class Server(BaseServer):
         ip = socket.gethostbyname(host)
         sock = socket.create_connection((ip, port))
         sock.setblocking(False)
-        self.conn_socks.add(sock)
+        self.tcp_socks.add(sock)
         self.sock_id_map[sock] = id_
         self.id_tunnel_map[id_] = ServerTunnel(id_, sock, peer)
         return self.id_tunnel_map[id_]

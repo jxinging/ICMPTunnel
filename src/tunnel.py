@@ -36,7 +36,7 @@ class ClientTunnel(BaseTunnel):
 
 
 class ServerTunnel(BaseTunnel):
-    def __init__(self, peer, id_, socket, client):
+    def __init__(self, id_, socket, client):
         # seq 0-9 保留特殊使用, server 发出的包seq为偶数
         BaseTunnel.__init__(self, id_, 11, 10, socket)
         self.peer = client

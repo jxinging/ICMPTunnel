@@ -18,6 +18,7 @@ class BaseServer(object):
         self.blocked_socks = set()
 
         self.select_socks = None
+        self.icmp_type = None
 
     def new_id(self):
         raise NotImplemented
@@ -27,11 +28,12 @@ class BaseServer(object):
         sock.close()
         self.tcp_socks.remove(sock)
 
-    def send_icmp(self, peer, id_, data, seq=None, type_=8):
-        tun = self.id_tunnel_map[id_]
+    def send_icmp(self, peer, id_, data, seq=None, type_=None):
         if seq is None:
+            tun = self.id_tunnel_map[id_]
             seq = tun.next_send_seq()
-
+        if type_ is None:
+            type_ = self.icmp_type
         ICMPPocket(type_, id_, seq, MAGIC_ID+data).sendto(self.icmp_sock, peer)
 
     def recv_icmp(self):
@@ -39,7 +41,7 @@ class BaseServer(object):
         if not icmp_p.data.startswith(MAGIC_ID):
             return None
 
-        self.send_icmp(icmp_p.addr, icmp_p.id, "/ack"+str(icmp_p.seq), 0)
+        BaseServer.send_icmp(self, icmp_p.addr, icmp_p.id, "/ack"+str(icmp_p.seq), 0)
         if icmp_p.id in  self.id_tunnel_map and \
                         icmp_p.seq < self.id_tunnel_map[icmp_p.id]:
             return      # 丢弃已处理过的数据
