@@ -41,6 +41,10 @@ class ICMPPocket(object):
         self.data = data
         self.addr = addr
 
+    def __str__(self):
+        return "addr: %s, type:%d, id:%d, seq:%d, data:%s ..." % \
+            (self.addr, self.type, self.id, self.seq, str(self.data[:64]))
+
     @classmethod
     def parse(cls, obj, buflen=None):
         if buflen is not None:
