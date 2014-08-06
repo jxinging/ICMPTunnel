@@ -7,4 +7,6 @@
 1. socket 连接异常处理
 2. 分析优化网络极差情况
 3. 保活超时机制
+4. 节省CPU占用(checksum, struct)
+5. icmp type hack
 
