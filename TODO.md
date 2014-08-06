@@ -4,5 +4,7 @@
 - 发数据
 
 # TODO:
-1. send_icmp_ack(), send_icmp_close(), send_icmp_data()
+1. socket 连接异常处理
+2. 分析优化网络极差情况
+3. 保活超时机制
 

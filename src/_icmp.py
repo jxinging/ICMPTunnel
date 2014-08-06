@@ -2,6 +2,7 @@
 __author__ = 'JinXing'
 
 import struct
+import random
 
 
 def icmp_checksum(source_string):
@@ -9,6 +10,7 @@ def icmp_checksum(source_string):
     I'm not too confident that this is right but testing seems
     to suggest that it gives the same answers as in_cksum in ping.c
     """
+    # return random.randint(0, 0xFFFF)
     sum_ = 0
     count_to = (len(source_string) / 2) * 2
     for count in xrange(0, count_to, 2):
@@ -60,7 +62,9 @@ class ICMPPocket(object):
 
     def create(self):
         packfmt = "!BBHHH%ds" % (len(self.data))
+        # checksum = random.randint(0, 0xFFFF)  # save cpu
         args = [self.type, self.code, 0, self.id, self.seq, self.data]
+        # print args
         args[2] = icmp_checksum(struct.pack(packfmt, *args))
         return struct.pack(packfmt, *args)
 
