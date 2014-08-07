@@ -76,7 +76,7 @@ class BaseServer(object):
 
         elif msg.is_close():
             if not tun.close_timeout:
-                logger.debug("tunnel %d closing", tun.id)
+                logger.info("tunnel %d closing", tun.id)
                 tun.send_icmp_close()
                 tun.close_timeout = time.time() + CLOSE_TIMEOUT
                 self.socket_close(tun.socket)
@@ -111,24 +111,39 @@ class BaseServer(object):
                 self.update_select_socks()
 
             if tun.close_timeout and tun.close_timeout >= time.time():
-                logger.debug("tunnel %d closed", tun.id)
+                logger.info("tunnel %d closed", tun.id)
                 delete_tun_ids.append(tun.id)
 
         for tun_id in delete_tun_ids:
             del self.id_tunnel_map[tun_id]
 
     def process_recv_tcp(self, sock):
-        data = sock.recv(TCP_BUF_LEN)
-        # logger.debug("recv tcp data: %s ...", str(data[:64]))
         tun = None
         if sock in self.sock_id_map:
             tun = self.id_tunnel_map.get(self.sock_id_map[sock], None)
 
+        try:
+            data = sock.recv(TCP_BUF_LEN)
+            # logger.debug("recv tcp data: %s ...", str(data[:64]))
+        except socket.error, e:
+            if e.errno in (errno.EAGAIN, errno.EWOULDBLOCK):
+                logger.debug("[retry] tunnel %d tcp send", tun.id)
+                if data and tun:
+                    tun.icmp_send_bufs.append(data)
+            else:
+                if tun:
+                    logger.error("tunnel %d tcp recv error: %s", tun.id, e)
+                    tun.send_icmp_close()
+                    tun.close_timeout = time.time() + CLOSE_TIMEOUT
+                else:
+                    logger.error("tcp(%s) recv error: %s", sock.getpeername(), e)
+                self.socket_close(tun.socket)
+
         if not data:
             if tun:
-                logger.debug("tunnel %d, tcp socket %s closed", tun.id, sock.getpeername())
+                logger.info("tunnel %d, tcp socket %s closed", tun.id, sock.getpeername())
             else:
-                logger.debug("tcp socket closed: %s", sock.getpeername())
+                logger.info("tcp socket closed: %s", sock.getpeername())
             self.socket_close(sock)
             if tun:
                 tun = self.id_tunnel_map[tun.id]
@@ -161,7 +176,7 @@ class BaseServer(object):
                         logger.debug("[retry] tunnel %d tcp send", tun.id)
                         tun.tcp_send_bufs.append(data)
                     else:
-                        logger.debug("tunnel %d tcp send error: %s", tun.id, e)
+                        logger.error("tunnel %d tcp send error: %s", tun.id, e)
                         self.socket_close(tun.socket)
                         tun.send_icmp_close()
                         tun.close_timeout = time.time() + CLOSE_TIMEOUT
