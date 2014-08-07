@@ -20,12 +20,12 @@ class Server(BaseServer):
                                       socket.getprotobyname("icmp"))
 
     # TODO: 异步建立　TCP　连接
-    def new_tunnel(self, peer, tun_id, seq, host=None, port=None):
+    def new_tunnel(self, peer, tun_id, host=None, port=None):
         if host is None:
             host = self.target_host
         if port is None:
             port = self.target_port
-        logger.debug("new connection: %s#%d.%d", peer, tun_id, seq)
+        logger.info("new connection: %s#%d => %s:%d", peer, tun_id, host, port)
         ip = socket.gethostbyname(host)
         sock = socket.create_connection((ip, port))
         sock.setblocking(False)
@@ -35,20 +35,14 @@ class Server(BaseServer):
         self.id_tunnel_map[tun_id] = ServerTunnel(tun_id, sock, self.icmp_sock, peer)
         return self.id_tunnel_map[tun_id]
 
-    def check_seq(self, icmp_p):
-        if icmp_p.seq % 2 != 0:
-            # logger.debug("check_seq() seq no error: %d", icmp_p.seq)
-            return False
-        return BaseServer.check_seq(self, icmp_p)
-
     def recv_icmp(self):
         icmp_p = BaseServer.recv_icmp(self)
-        if icmp_p and icmp_p.id not in self.id_tunnel_map:
-            try:
-                self.new_tunnel(icmp_p.addr, icmp_p.id, icmp_p.seq)
-            except Exception, e:
-                logger.debug("create new tunnel failed: %s", e)
-                return None
+        # if icmp_p and icmp_p.id not in self.id_tunnel_map:
+        #     try:
+        #         self.new_tunnel(icmp_p.addr, icmp_p.id, icmp_p.seq)
+        #     except Exception, e:
+        #         logger.debug("create new tunnel failed: %s", e)
+        #         return None
         return icmp_p
 
     def serve_forever(self, poll_interval=0.01):
@@ -70,6 +64,7 @@ class Server(BaseServer):
 
 if __name__ == "__main__":
     s = Server("127.0.0.1", 80)
+    #s = Server("121.201.1.110", 9141)
     #s = Server("usvps.jinxing.me", 80)
     logger.info("ICMP Serving ...")
     s.serve_forever()

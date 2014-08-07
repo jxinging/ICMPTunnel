@@ -25,10 +25,13 @@ class BaseTunnel(object):
         self.icmp_send_bufs = {}    # seq:data
         self.icmp_recv_bufs = {}    # seq:data
         self.icmp_wait_ack_bufs = {}    # seq: [timeout, data]
-        self.last_live = 0   # 上一次收到数据包的时间戳
+        self.last_live = time.time()   # 上一次收到数据包的时间戳
         self.close_timeout = 0
         self.peer = peer
         self.trans_bytes = 0
+        self.send_count = 0
+        self.data_send_count = 0
+        self.retry_count = 0
 
     def update_send_seq(self):
         self.send_seq = self.next_send_seq()
@@ -44,26 +47,39 @@ class BaseTunnel(object):
     def next_recv_seq(self):
         return (self.recv_seq + 1) % ICMP_SEQ_MAX
 
+    def send_icmp_connect(self, ip=None, port=None):
+        msg = self.MessageCls.connect_msg(ip, port)
+        data = msg.encode()
+        seq = self.send_seq
+        # self.update_send_seq()
+        self.icmp_wait_ack_bufs[seq] = (time.time()+ACK_TIMEOUT, data)
+        return self._send_icmp(data, self.ICMP_TYPE, seq)
+
     def send_icmp_ack(self, ack_seq):
-        msg = self.MessageCls(MSG_TYPE_ACK, str(ack_seq))
+        msg = self.MessageCls.ack_msg(ack_seq, self.recv_seq)
         return self._send_icmp(msg.encode(), self.ICMP_TYPE)
 
     def send_icmp_close(self):
-        msg = self.MessageCls(MSG_TYPE_CLOSE)
+        msg = self.MessageCls.close_msg()
         return self._send_icmp(msg.encode(), self.ICMP_TYPE)
 
     def send_icmp_data(self, data, seq=None):
-        msg = self.MessageCls(MSG_TYPE_DATA, data)
+        msg = self.MessageCls.data_msg(data)
+        self.data_send_count += 1
         return self._send_icmp(msg.encode(), self.ICMP_TYPE, seq)
+
+    def send_icmp_keepalive(self):
+        msg = self.MessageCls.keepalive_msg()
+        return self._send_icmp(msg.encode(), self.ICMP_TYPE)
 
     def _send_icmp(self, data, type_, seq=None):
         if seq is None:
             seq = self.send_seq
             self.update_send_seq()
-        ICMPPocket(type_, self.id, seq, AUTH_STR+data).sendto(self.icmp_socket, self.peer)
+        self.send_count += 1
+        return ICMPPocket(type_, self.id, seq, AUTH_STR+data).sendto(self.icmp_socket, self.peer)
 
-    def process_icmp(self, icmp_p):
-        msg = self.MessageCls.decode(icmp_p.data)
+    def process_icmp(self, icmp_p, msg):
         if msg.from_type != self.MessageCls.ACCEPT_FROM:
             # logger.debug("msg from type error: %s", str(msg))
             return
@@ -83,17 +99,20 @@ class BaseTunnel(object):
                     del self.icmp_recv_bufs[next_seq]
                     next_seq = self.update_recv_seq()   # **
 
-            # recv_seq 接近最大值时小于当前 recv_seq 的包也接收
+            # 缓存后续的包(recv_seq 接近最大值时小于当前 recv_seq 的包也接收)
             elif icmp_p.seq > self.recv_seq or \
-                            self.recv_seq > (ICMP_SEQ_MAX - MAX_BUFS_LEN):
-                if len(self.icmp_recv_bufs) > MAX_BUFS_LEN:
-                    logger.warn("icmp recv buf len %d", len(self.icmp_recv_bufs))
+                            self.recv_seq > (ICMP_SEQ_MAX - MAX_WAIT_ACK_POCKETS):
+                if len(self.icmp_recv_bufs) > MAX_WAIT_ACK_POCKETS*4:
+                    logger.warn("recv buf len %d, drop data", len(self.icmp_recv_bufs))
                     send_ack = False
-                self.icmp_recv_bufs[icmp_p.seq] = msg.data
-                logger.debug("cached icmp recv data %d.%d, cached pocket: %d",
-                             icmp_p.id, icmp_p.seq, len(self.icmp_recv_bufs))
+                else:
+                    self.icmp_recv_bufs[icmp_p.seq] = msg.data
+                    logger.info("cached data %d.%d, cached pockets: %d, recv_seq: %d",
+                                icmp_p.id, icmp_p.seq, len(self.icmp_recv_bufs), self.recv_seq)
             elif icmp_p.seq < self.recv_seq:
-                logger.debug("drop icmp recved data %d.%d", icmp_p.id, icmp_p.seq)
+                logger.info("drop data %d.%d, recv_seq: %d",
+                            icmp_p.id, icmp_p.seq, self.recv_seq)
+                send_ack = True
 
             if send_ack:
                 self.send_icmp_ack(icmp_p.seq)
@@ -101,15 +120,42 @@ class BaseTunnel(object):
         elif msg.is_ack():
             self.update_recv_seq()  # **
 
-            ack_seq = int(msg.data)
+            ack_seq, peer_recv_seq = map(int, msg.data.split(","))
             if ack_seq in self.icmp_wait_ack_bufs:
                 # logger.debug("ack %d.%d", self.id, ack_seq)
+                self.trans_bytes += len(self.icmp_wait_ack_bufs[ack_seq][1])
                 del self.icmp_wait_ack_bufs[ack_seq]
+
+            # 有可能收到 ack 包时，数据包已经被重新加入到发送队列
+            if ack_seq in self.icmp_send_bufs:
+                self.trans_bytes += len(self.icmp_send_bufs[ack_seq])
+                del self.icmp_send_bufs[ack_seq]
+
+            for seq in sorted(self.icmp_wait_ack_bufs.keys()):
+                if seq < peer_recv_seq:
+                    del self.icmp_wait_ack_bufs[seq]
+                else:
+                    break
+
+            for seq in sorted(self.icmp_send_bufs.keys()):
+                if seq < peer_recv_seq:
+                    del self.icmp_send_bufs[seq]
+                else:
+                    break
             # Server.process_recv_icmp() 还会对该类消息进行其他处理
 
         elif msg.is_close():
             self.update_recv_seq()  # **
             # Server.process_recv_icmp() 还会对该类消息进行其他处理
+
+        elif msg.is_connect():
+            # self.update_recv_seq()  # ** 创建连接的消息不占用 seq num
+            # 创建新连接消息由 Server.process_recv_icmp() 处理
+            pass
+
+        elif msg.is_keepalive():
+            self.update_recv_seq()  # **
+            #self.send_icmp_keepalive()
 
         else:
             logger.warn("error msg type: %s", str(msg))

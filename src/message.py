@@ -10,9 +10,11 @@ import struct
 
 MSG_VERSION = 1
 
-MSG_TYPE_ACK = 0x01
-MSG_TYPE_CLOSE = 0x02
-MSG_TYPE_DATA = 0x04
+MSG_TYPE_CONN = 0x01  # 建立新连接
+MSG_TYPE_ACK = 0x02
+MSG_TYPE_CLOSE = 0x04
+MSG_TYPE_DATA = 0x08
+MSG_TYPE_KEEPALIVE = 0x16    # 保活
 
 MSG_FROM_CLIENT = 0x00  # 最高位为0
 MSG_FROM_SERVER = 0x80  # 最高位为1
@@ -33,16 +35,37 @@ class Message(object):
         self.from_type = from_type
 
     @classmethod
-    def ack_msg(cls, ack_seq):
-        return cls(MSG_TYPE_ACK, ack_seq)
+    def connect_msg(cls, ip=None, port=None):
+        """构造建立新连接的消息
+        ip: 该连接最终请求的 IP
+        port: 该连接最终请求的 port
+        未指定 ip,port 时使用配置的默认值
+        """
+        data = ""
+        if ip and port:
+            data = "%s:%d" % (ip, port)
+        return cls(MSG_TYPE_CONN, data)
+
+    @classmethod
+    def ack_msg(cls, ack_seq, recv_seq):
+        """
+        ack_seq: 该次确认的 seq
+        recv_seq: 期待收到的下一个包的 seq
+        """
+        data = "%s,%s" % (ack_seq, recv_seq)
+        return cls(MSG_TYPE_ACK, data)
 
     @classmethod
     def close_msg(cls):
-        return cls(MSG_TYPE_ACK)
+        return cls(MSG_TYPE_CLOSE)
 
     @classmethod
     def data_msg(cls, data):
-        return cls(MSG_TYPE_ACK, data)
+        return cls(MSG_TYPE_DATA, data)
+
+    @classmethod
+    def keepalive_msg(cls):
+        return cls(MSG_TYPE_KEEPALIVE)
 
     @classmethod
     def decode(cls, raw):
@@ -61,11 +84,14 @@ class Message(object):
             from_str = "client"
         elif from_type == MSG_FROM_SERVER:
             from_str = "server"
-        return "from:%s, type:%d, data:%r" % (from_str, self.type, self.data)
+        return "from:%s, type:%d, data:%r" % (from_str, self.type, self.data[:16])
 
     def encode(self):
         p = struct.pack(HEAD_FMT_STR, MSG_VERSION, self.from_type | self.type)
         return p+self.data
+
+    def is_connect(self):
+        return self.type == MSG_TYPE_CONN
 
     def is_ack(self):
         return self.type == MSG_TYPE_ACK
@@ -75,6 +101,9 @@ class Message(object):
 
     def is_data(self):
         return self.type == MSG_TYPE_DATA
+
+    def is_keepalive(self):
+        return self.type == MSG_TYPE_KEEPALIVE
 
     def is_client_msg(self):
         return self.from_type == MSG_FROM_CLIENT

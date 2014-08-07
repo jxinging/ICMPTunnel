@@ -32,20 +32,45 @@ class ClientServer(BaseServer):
         
     def new_id(self):
         id_ = self._id
-        self._id += 1
+        self._id = (self._id+1) % 0xFFFF
         return id_
 
-    def check_seq(self, icmp_p):
-        if icmp_p.seq % 2 != 1 and icmp_p.seq not in (0,):
-            # logger.debug("check_seq() seq no error: %d", icmp_p.seq)
-            return False
-        return BaseServer.check_seq(self, icmp_p)
+    def new_tunnel(self, cli_sock, tun_id, host=None, port=None):
+        logger.info("new tunnel %s => %s#%d => %s:%d",
+                    cli_sock.getpeername(), self.peer_host, tun_id, host, port)
+        tun = ClientTunnel(tun_id, cli_sock, self.icmp_sock, self.peer_host)
+        tun.send_icmp_connect(host, port)
+        self.sock_id_map[cli_sock] = tun_id
+        self.id_tunnel_map[tun_id] = tun
+        return tun
 
     def recv_icmp(self):
         icmp_p = BaseServer.recv_icmp(self)
         if icmp_p and icmp_p.id not in self.id_tunnel_map:
             return
         return icmp_p
+
+    def recv_tcp(self, sock, tun):
+        data, host, port = BaseServer.recv_tcp(self, sock, tun)
+
+        # 只有第一次接收到一个连接的数据时才解析代理参数
+        if not tun and data.find(" HTTP/") > 0:
+            idx = data.find("Host:")
+            if idx < 0:  # not find Host:
+                return data, host, port
+
+            start_idx = idx + 5     # len("Host:") = 5
+            end_idx = data.find("\r", start_idx)
+            http_host_str = data[start_idx:end_idx].strip()
+            if http_host_str.find(":") > 0:
+                host, port = http_host_str.split(":")
+                port = int(port)
+            else:
+                host = http_host_str
+                port = 80
+            logger.info("setup http proxy to %s:%d", host, port)
+
+        return data, host, port
 
     def process_listen_sock(self):
         cli_sock, cli_addr = self.listen_sock.accept()
@@ -55,18 +80,6 @@ class ClientServer(BaseServer):
         logger.debug("accept connect: %s", str(cli_sock.getpeername()))
 
     def process_recv_tcp(self, sock):
-        tun_id = self.sock_id_map.get(sock, None)
-        if not tun_id or tun_id not in self.id_tunnel_map:
-            tun_id = self.new_id()
-            logger.debug("new tunnel: %d", tun_id)
-            self.sock_id_map[sock] = tun_id
-            try:
-                self.id_tunnel_map[tun_id] = ClientTunnel(
-                    tun_id, sock, self.icmp_sock, self.peer_host)
-            except Exception, e:
-                logger.error("create new tunnel failed: %s", e)
-                return
-
         return BaseServer.process_recv_tcp(self, sock)
 
     def serve_active(self):
@@ -94,9 +107,9 @@ class ClientServer(BaseServer):
 
 if __name__ == "__main__":
     #s = ClientServer("14.17.123.11", 9140)
-    #s = ClientServer("usvps.jinxing.me", 9140)
+    s = ClientServer("usvps.jinxing.me", 9140)
     #s = ClientServer("10.19.190.21", 9140)
-    s = ClientServer("121.201.1.110", 9140)
+    #s = ClientServer("121.201.1.110", 9140)
     s.serve_active()
     logging.info("Serving %s", str(s.listen_sock.getsockname()))
     s.serve_forever()
