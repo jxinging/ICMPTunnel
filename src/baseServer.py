@@ -102,23 +102,29 @@ class BaseServer(object):
         if msg.is_ack():
             sock = tun.socket
             if sock in self.blocked_socks:
-                if min_wait_ack_seq not in tun.icmp_wait_ack_bufs:
-                    # len(tun.icmp_wait_ack_bufs) < MAX_WAIT_ACK_POCKETS / 2 and\
+                # 最小seq的包以及一半的包都收到了 ack 才重新启用 tunnel
+                if min_wait_ack_seq not in tun.icmp_wait_ack_bufs:  #and \
+                #if len(tun.icmp_wait_ack_bufs) < MAX_WAIT_ACK_POCKETS:
                     logger.debug("tunnel %d activated", tun.id)
-                    self.tcp_socks.add(sock)
-                    self.blocked_socks.remove(sock)
-                    self.update_select_socks()
+                    tun.blocked = False
+                    if not tun.close_timeout:
+                        self.tcp_socks.add(sock)
+                        self.blocked_socks.remove(sock)
+                        self.update_select_socks()
 
         elif msg.is_close():
-            if not tun.close_timeout:
+            if not tun.closing:
                 logger.info("recv tunnel close message, tunnel %d closing", tun.id)
-                tun.send_icmp_close()
-                tun.close_timeout = time.time() + CLOSE_TIMEOUT
+                tun.closing = True
                 # self.socket_close(tun.socket)
 
     def process_icmp_bufs(self):
         delete_tun_ids = []     # save resource
         for tun in self.id_tunnel_map.itervalues():
+
+            if tun.check_send_ack_timeout():
+                tun.send_icmp_ack()
+
             # wait_bufs timeout
             now_time = time.time()
             for seq in tun.icmp_wait_ack_bufs.keys():
@@ -126,46 +132,62 @@ class BaseServer(object):
                 if now_time >= timeout:
                     logger.debug("icmp data %d.%d ack timeout", tun.id, seq)
                     tun.retry_count += 1
-                    tun.icmp_send_bufs[seq] = data
-                    del tun.icmp_wait_ack_bufs[seq]
+                    tun.send_icmp_data(data, seq)
+                    tun.icmp_wait_ack_bufs[seq] = (now_time+ACK_TIMEOUT, data)
 
             # send_bufs
-            now_time = time.time()
-            for seq in sorted(tun.icmp_send_bufs.keys()):
-                if len(tun.icmp_wait_ack_bufs) > MAX_WAIT_ACK_POCKETS:
-                    break
-                data = tun.icmp_send_bufs[seq]
-                # logger.debug("send icmp[%d.%d] %d bytes", tun.id, seq, len(data))
-                tun.send_icmp_data(data, seq)
-                tun.icmp_wait_ack_bufs[seq] = (now_time+ACK_TIMEOUT, data)
-                del tun.icmp_send_bufs[seq]
+            if not tun.blocked:
+                now_time = time.time()
+                for seq in sorted(tun.icmp_send_bufs.keys()):
+                    if len(tun.icmp_wait_ack_bufs) >= MAX_WAIT_ACK_POCKETS:
+                        logger.debug("tunnel %d blocked", tun.id)
+                        tun.blocked = True
+                        break
+                    data = tun.icmp_send_bufs[seq]
+                    logger.debug("send icmp[%d.%d] %d bytes", tun.id, seq, len(data))
+                    tun.send_icmp_data(data, seq)
+                    tun.icmp_wait_ack_bufs[seq] = (now_time+ACK_TIMEOUT, data)
+                    del tun.icmp_send_bufs[seq]
 
-            # wait_bufs
-            if tun.socket not in self.blocked_socks and \
-                            len(tun.icmp_wait_ack_bufs) > MAX_WAIT_ACK_POCKETS:
-                logger.debug("tunnel %d blocked", tun.id)
-                self.blocked_socks.add(tun.socket)
-                self.tcp_socks.remove(tun.socket)
-                self.update_select_socks()
+                if tun.blocked and not tun.closing:
+                    self.blocked_socks.add(tun.socket)
+                    self.tcp_socks.remove(tun.socket)
+                    self.update_select_socks()
 
+            # keepalive
             now_time = time.time()
-            if now_time - tun.last_live > KEEPALIVE_TIMEOUT:
-                logger.debug("tunnel %d keepalive timeout, close it", tun.id)
-                tun.close_timeout = now_time + KEEPALIVE_TIMEOUT
-                # tun.send_icmp_close()
-            elif now_time - tun.last_live > KEEPALIVE_TIMEOUT / 2:
+            if now_time - tun.last_live >= KEEPALIVE_TIMEOUT:
+                if not tun.closing:
+                    logger.debug("tunnel %d keepalive timeout, close it", tun.id)
+                    tun.closing = True
+                tun.close_timeout = time.time()+CLOSE_TIMEOUT   # keepalive 超时后不管队列中是否有数据都关闭连接
+                tun.send_icmp_close()
+            elif now_time - tun.last_live >= KEEPALIVE_TIMEOUT / 2:
                 tun.send_icmp_keepalive()
 
-            if tun.close_timeout and tun.close_timeout >= now_time:
+            if tun.closing and not tun.icmp_wait_ack_bufs and \
+                    not tun.icmp_send_bufs and not tun.tcp_send_bufs:
+                tun.close_timeout = time.time()+CLOSE_TIMEOUT
+
+            if tun.closing and tun.close_timeout != 0 and tun.close_timeout <= time.time():
+                # logger.debug("close timeout: %f, now time: %f", tun.close_timeout, time.time())
+                tun.send_icmp_ack(None, False)  # 强制发送 ack 包
                 logger.info("tunnel %d closed", tun.id)
+                if not tun.socket_closed:
+                    tun.socket_closed = True
+                    self.socket_close(tun.socket)
                 delete_tun_ids.append(tun.id)
 
+        # delete tunnel
         for tun_id in delete_tun_ids:
             tun = self.id_tunnel_map[tun_id]
             logger.info("tunnel %d send bytes: %d, send count: %d, "
                         "send data count: %d, retry count: %d",
                         tun.id, tun.trans_bytes, tun.send_count, tun.data_send_count, tun.retry_count)
             del self.id_tunnel_map[tun_id]
+
+        if delete_tun_ids:
+            logger.info("connecting tunnels %d", len(self.id_tunnel_map))
 
     def process_recv_tcp(self, sock):
         tun = None
@@ -188,10 +210,13 @@ class BaseServer(object):
                 if tun:
                     logger.error("tunnel %d tcp recv error: %s", tun.id, e)
                     tun.send_icmp_close()
-                    tun.close_timeout = time.time() + CLOSE_TIMEOUT
+                    tun.closing = True
+                    if not tun.socket_closed:
+                        tun.socket_closed = True
+                        self.socket_close(sock)
                 else:
                     logger.error("tcp recv error: %s", e)
-                self.socket_close(sock)
+                    self.socket_close(sock)
                 return
 
         if not data:
@@ -203,10 +228,13 @@ class BaseServer(object):
                 logger.info("tunnel %d, tcp socket %s closed. send tunnel close message", tun.id, sock_info)
                 tun = self.id_tunnel_map[tun.id]
                 tun.send_icmp_close()
-                tun.close_timeout = time.time() + CLOSE_TIMEOUT
+                if not tun.socket_closed:
+                    tun.closing = True
+                    tun.socket_closed = True
+                    self.socket_close(sock)
             else:
                 logger.info("tcp socket closed: %s", sock_info)
-            self.socket_close(sock)
+                self.socket_close(sock)
             return
 
         if not tun:
@@ -223,6 +251,7 @@ class BaseServer(object):
             logger.error("Can't find bound tunnel: %s", str(sock.getpeername()))
             return
 
+        logger.debug("ready send data %d.%d", tun.id, tun.send_seq)
         tun.icmp_send_bufs[tun.send_seq] = data
         tun.update_send_seq()
 
@@ -244,9 +273,11 @@ class BaseServer(object):
                         logger.debug("tunnel %d tcp send error: resource busy", tun.id)
                     else:
                         logger.error("tunnel %d tcp send error: %s", tun.id, e)
-                        self.socket_close(tun.socket)
+                        if not tun.socket_closed:
+                            self.socket_close(tun.socket)
+                            tun.socket_closed = True
                         tun.send_icmp_close()
-                        tun.close_timeout = time.time() + CLOSE_TIMEOUT
+                        tun.closing = True
 
                     break   # 一旦出错就退出发送循环
 

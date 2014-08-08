@@ -47,12 +47,13 @@ class Message(object):
         return cls(MSG_TYPE_CONN, data)
 
     @classmethod
-    def ack_msg(cls, ack_seq, recv_seq):
+    def ack_msg(cls, recv_seq, ack_seqs):
         """
         ack_seq: 该次确认的 seq
         recv_seq: 期待收到的下一个包的 seq
         """
-        data = "%s,%s" % (ack_seq, recv_seq)
+        ack_seqs_str = ",".join(map(str, ack_seqs))
+        data = "%s,%s" % (recv_seq, ack_seqs_str)
         return cls(MSG_TYPE_ACK, data)
 
     @classmethod

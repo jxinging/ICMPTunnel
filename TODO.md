@@ -9,4 +9,10 @@
 3. 保活超时机制
 4. 节省CPU占用(checksum, struct)
 5. icmp type hack
+6. icmp_send_bufs 改成 list
+7. 异步建立　TCP　连接
+8. 批量确认，确认重传 **
 
+9. 整理 tun.closing 等状态的管理， 统一接口化, 发送接收数据前先检查 socket 状态
+10. 自动 ack timeout 调节
+11. 第一个建立连接的包超时后就断开连接, 加快连接不成功时的返回速度
