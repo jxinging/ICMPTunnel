@@ -36,7 +36,7 @@ class ClientServer(BaseServer):
         return id_
 
     def new_tunnel(self, cli_sock, tun_id, host=None, port=None):
-        logger.info("new tunnel %s => %s#%d => %s:%d",
+        logger.info("new tunnel %s => %s#%d => %s:%s",
                     cli_sock.getpeername(), self.peer_host, tun_id, host, port)
         tun = ClientTunnel(tun_id, cli_sock, self.icmp_sock, self.peer_host)
         tun.send_icmp_connect(host, port)
@@ -90,8 +90,9 @@ class ClientServer(BaseServer):
         self.update_select_socks()
         empty_list = ()
         while 1:
-            r_socks, _, _ = select.select(self.select_socks,
-                                       empty_list, empty_list, poll_interval)
+            st = time.time()
+            r_socks, _, _ = select.select(self.select_socks, empty_list,
+                                          empty_list, poll_interval)
 
             if self.listen_sock in r_socks:
                 self.process_listen_sock()
@@ -104,6 +105,9 @@ class ClientServer(BaseServer):
 
             self.process_tcp_bufs()
             self.process_icmp_bufs()
+            cost_time = time.time()-st
+            if cost_time < poll_interval:
+                time.sleep(poll_interval-cost_time)
 
 if __name__ == "__main__":
     #s = ClientServer("14.17.123.11", 9140)

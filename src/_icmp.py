@@ -33,6 +33,15 @@ def icmp_checksum(source_string):
     return answer
 
 
+def encrypt(data):
+    return data
+    # return ''.join(map(lambda x: chr(ord(x) ^ 0x08), data))
+
+
+def decrypt(data):
+    return data
+    # return encrypt(data)
+
 class ICMPPocket(object):
     def __init__(self, type_, id_, seq, data, checksum=0, code=0, addr=None):
         self.type = type_
@@ -57,13 +66,14 @@ class ICMPPocket(object):
             raw = obj
             addr = None
         type_, code, checksum, id_, seq = struct.unpack("!BBHHH", raw[20:28])
-        data = raw[28:]
+        data = decrypt(raw[28:])
         return cls(type_, id_, seq, data, checksum, code, addr)
 
     def create(self):
         packfmt = "!BBHHH%ds" % (len(self.data))
         # checksum = random.randint(0, 0xFFFF)  # save cpu
-        args = [self.type, self.code, 0, self.id, self.seq, self.data]
+        data = encrypt(self.data)
+        args = [self.type, self.code, 0, self.id, self.seq, data]
         # print args
         args[2] = icmp_checksum(struct.pack(packfmt, *args))
         return struct.pack(packfmt, *args)

@@ -49,6 +49,7 @@ class Server(BaseServer):
         self.update_select_socks()
         empty_list = ()
         while 1:
+            st = time.time()
             r_socks, _, _ = select.select(self.select_socks,
                                           empty_list, empty_list, poll_interval)
 
@@ -61,9 +62,12 @@ class Server(BaseServer):
             self.process_tcp_bufs()
             self.process_icmp_bufs()
 
+            cost_time = time.time()-st
+            if cost_time < poll_interval:
+                time.sleep(poll_interval-cost_time)
 
 if __name__ == "__main__":
-    s = Server("127.0.0.1", 80)
+    s = Server("127.0.0.1", 9050)
     #s = Server("121.201.1.110", 9141)
     #s = Server("usvps.jinxing.me", 80)
     logger.info("ICMP Serving ...")

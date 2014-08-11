@@ -89,6 +89,7 @@ class Message(object):
 
     def encode(self):
         p = struct.pack(HEAD_FMT_STR, MSG_VERSION, self.from_type | self.type)
+        # print p, self.data
         return p+self.data
 
     def is_connect(self):
