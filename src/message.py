@@ -47,14 +47,9 @@ class Message(object):
         return cls(MSG_TYPE_CONN, data)
 
     @classmethod
-    def ack_msg(cls, recv_seq, ack_seqs):
-        """
-        ack_seq: 该次确认的 seq
-        recv_seq: 期待收到的下一个包的 seq
-        """
-        ack_seqs_str = ",".join(map(str, ack_seqs))
-        data = "%s,%s" % (recv_seq, ack_seqs_str)
-        return cls(MSG_TYPE_ACK, data)
+    def ack_msg(cls, ack_seq_ranges):
+        ack_data = "".join(map(lambda x: struct.pack("H", x), ack_seq_ranges))
+        return cls(MSG_TYPE_ACK, ack_data)
 
     @classmethod
     def close_msg(cls):
@@ -85,7 +80,7 @@ class Message(object):
             from_str = "client"
         elif from_type == MSG_FROM_SERVER:
             from_str = "server"
-        return "from:%s, type:%d, data:%r" % (from_str, self.type, self.data[:16])
+        return "from:%s, type:%d, data:%r" % (from_str, self.type, str(self.data)[:8])
 
     def encode(self):
         p = struct.pack(HEAD_FMT_STR, MSG_VERSION, self.from_type | self.type)

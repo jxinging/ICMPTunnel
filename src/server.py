@@ -64,10 +64,11 @@ class Server(BaseServer):
 
             cost_time = time.time()-st
             if cost_time < poll_interval:
-                time.sleep(poll_interval-cost_time)
+                pass
+                # time.sleep(poll_interval-cost_time)
 
 if __name__ == "__main__":
-    s = Server("127.0.0.1", 9050)
+    s = Server("127.0.0.1", 1080)
     #s = Server("121.201.1.110", 9141)
     #s = Server("usvps.jinxing.me", 80)
     logger.info("ICMP Serving ...")
