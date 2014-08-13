@@ -22,7 +22,7 @@ TCP_BUF_LEN = MAX_POCKET_SIZE - 20 - 8 - len(AUTH_STR) - 2
 MAX_WAIT_ACK_POCKETS = 512  # 最多等待确认的数据包数量
 MAX_CACHE_POCKETS = MAX_WAIT_ACK_POCKETS * 4    # 最多缓存的数据包
 
-RTT = 0.2
+RTT = 0.4
 ACK_TIMEOUT = RTT * 10   # 确认超时时长
 KEEPALIVE_TIMEOUT = RTT * 50    # 保活超时时长
 CLOSE_TIMEOUT = KEEPALIVE_TIMEOUT   # 关闭 tunnel 后等待的时长

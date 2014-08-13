@@ -164,7 +164,7 @@ class BaseServer(object):
                     logger.debug("tunnel %d keepalive timeout, close it", tun.id)
                     tun.closing = True
                 if not tun.close_timeout:
-                    if tun.recv_seq == 0:   # 对方没有回包，不进行关闭超时等待
+                    if tun.recv_seq == 0:   # 对方没有返回过任何包，不进行关闭超时等待
                         timeout = time.time()
                     else:
                         timeout = time.time() + CLOSE_TIMEOUT
@@ -237,7 +237,7 @@ class BaseServer(object):
                 tun = self.id_tunnel_map[tun.id]
                 tun.send_icmp_close()
                 if not tun.close_timeout:
-                    tun.closing = True
+                    # tun.closing = True
                     tun.close_timeout = time.time() + CLOSE_TIMEOUT
                 if not tun.socket_closed:
                     tun.socket_closed = True

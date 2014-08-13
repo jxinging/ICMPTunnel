@@ -112,9 +112,9 @@ class ClientServer(BaseServer):
 
 if __name__ == "__main__":
     #s = ClientServer("14.17.123.11", 9140)
-    #s = ClientServer("usvps.jinxing.me", 9140)
+    s = ClientServer("usvps.jinxing.me", 9140)
     #s = ClientServer("10.19.190.21", 9140)
-    s = ClientServer("121.201.1.110", 9140)
+    #s = ClientServer("121.201.1.110", 9140)
     s.serve_active()
     logging.info("Serving %s", str(s.listen_sock.getsockname()))
     s.serve_forever()
